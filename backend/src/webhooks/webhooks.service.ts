@@ -49,24 +49,8 @@ export class WebhooksService {
     );
 
     // ──────────────────────────────────────────────────────────────────
-    // APPEND-ONLY: Store every version of the webhook for this execution
-    // This is the audit trail. We never overwrite these.
-    // ──────────────────────────────────────────────────────────────────
-    await this.prisma.webhookEvent.create({
-      data: {
-        executionId: p.id,
-        status: p.status ?? null,
-        billingSettled: p.billing_settled ?? null,
-        totalCost: typeof p.total_cost === 'number' ? p.total_cost : null,
-        costBreakdown: p.cost_breakdown ? JSON.stringify(p.cost_breakdown) : null,
-        priceBreakdown: p.price_breakdown ? JSON.stringify(p.price_breakdown) : null,
-        rawPayload: JSON.stringify(payload),
-      },
-    });
-
-    // ──────────────────────────────────────────────────────────────────
-    // UPSERT: Keep latest state for the live-call view
-    // This is what the frontend renders as the "current" call.
+    // UPSERT FIRST: Parent row must exist before we append the event.
+    // Keep latest state for the live-call view.
     // ──────────────────────────────────────────────────────────────────
     const data = {
       id: p.id,
@@ -163,6 +147,23 @@ export class WebhooksService {
       where: { id: p.id },
       create: data,
       update: data,
+    });
+
+    // ──────────────────────────────────────────────────────────────────
+    // APPEND-ONLY: Store every version of the webhook for this execution.
+    // Parent row now exists, so FK constraint is satisfied.
+    // This is the audit trail. We never overwrite these.
+    // ──────────────────────────────────────────────────────────────────
+    await this.prisma.webhookEvent.create({
+      data: {
+        executionId: p.id,
+        status: p.status ?? null,
+        billingSettled: p.billing_settled ?? null,
+        totalCost: typeof p.total_cost === 'number' ? p.total_cost : null,
+        costBreakdown: p.cost_breakdown ? JSON.stringify(p.cost_breakdown) : null,
+        priceBreakdown: p.price_breakdown ? JSON.stringify(p.price_breakdown) : null,
+        rawPayload: JSON.stringify(payload),
+      },
     });
 
     // Count how many webhook events we've stored for this call
