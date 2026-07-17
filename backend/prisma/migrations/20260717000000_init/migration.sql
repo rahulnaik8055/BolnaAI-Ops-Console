@@ -1,18 +1,18 @@
 -- CreateTable
 CREATE TABLE "CallExecution" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "agentId" TEXT NOT NULL,
     "batchId" TEXT,
     "campaignId" TEXT,
     "status" TEXT NOT NULL,
     "smartStatus" TEXT,
     "provider" TEXT,
-    "scheduledAt" DATETIME,
-    "initiatedAt" DATETIME,
+    "scheduledAt" TIMESTAMP(3),
+    "initiatedAt" TIMESTAMP(3),
     "createdAtStr" TEXT,
     "updatedAtStr" TEXT,
     "answeredByVoicemail" BOOLEAN,
-    "conversationDuration" REAL,
+    "conversationDuration" DOUBLE PRECISION,
     "errorMessage" TEXT,
     "billingSettled" BOOLEAN,
     "processingStatus" TEXT,
@@ -20,14 +20,14 @@ CREATE TABLE "CallExecution" (
     "agentNumber" TEXT,
     "transcript" TEXT,
     "summary" TEXT,
-    "totalCost" REAL,
-    "llmCost" REAL,
-    "networkCost" REAL,
-    "platformCost" REAL,
-    "synthesizerCost" REAL,
-    "transcriberCost" REAL,
-    "timeToFirstAudio" REAL,
-    "streamId" REAL,
+    "totalCost" DOUBLE PRECISION,
+    "llmCost" DOUBLE PRECISION,
+    "networkCost" DOUBLE PRECISION,
+    "platformCost" DOUBLE PRECISION,
+    "synthesizerCost" DOUBLE PRECISION,
+    "transcriberCost" DOUBLE PRECISION,
+    "timeToFirstAudio" DOUBLE PRECISION,
+    "streamId" DOUBLE PRECISION,
     "latencyRegion" TEXT,
     "recordingUrl" TEXT,
     "toNumber" TEXT,
@@ -53,8 +53,10 @@ CREATE TABLE "CallExecution" (
     "agentContextDetails" TEXT,
     "agentExtraction" TEXT,
     "rawPayload" TEXT NOT NULL,
-    "updatedAt" DATETIME NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "CallExecution_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex

@@ -5,7 +5,7 @@ import {
   AnomalyEntry,
 } from "./types";
 
-const API_BASE = "http://localhost:5004";
+const API_BASE = "https://bolnaai-ops-console.onrender.com";
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });

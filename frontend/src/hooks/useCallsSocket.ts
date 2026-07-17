@@ -8,9 +8,14 @@ import {
   fetchLatencyStats,
   fetchAnomalies,
 } from "@/lib/api";
-import { CallExecution, CallStats, LatencyBaseline, AnomalyEntry } from "@/lib/types";
+import {
+  CallExecution,
+  CallStats,
+  LatencyBaseline,
+  AnomalyEntry,
+} from "@/lib/types";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:3000";
+const WS_URL = "https://bolnaai-ops-console.onrender.com";
 
 export interface CallsState {
   connected: boolean;
@@ -33,7 +38,8 @@ export function useCallsSocket(): CallsState {
   // Sort calls whenever the map changes
   useEffect(() => {
     const arr = Array.from(calls.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
     setSortedCalls(arr);
   }, [calls]);
@@ -43,12 +49,13 @@ export function useCallsSocket(): CallsState {
     let cancelled = false;
 
     async function init() {
-      const [callsData, statsData, latencyData, anomaliesData] = await Promise.allSettled([
-        fetchCalls(),
-        fetchStats(),
-        fetchLatencyStats(),
-        fetchAnomalies(),
-      ]);
+      const [callsData, statsData, latencyData, anomaliesData] =
+        await Promise.allSettled([
+          fetchCalls(),
+          fetchStats(),
+          fetchLatencyStats(),
+          fetchAnomalies(),
+        ]);
 
       if (cancelled) return;
 
@@ -59,7 +66,8 @@ export function useCallsSocket(): CallsState {
       }
       if (statsData.status === "fulfilled") setStats(statsData.value);
       if (latencyData.status === "fulfilled") setLatency(latencyData.value);
-      if (anomaliesData.status === "fulfilled") setAnomalies(anomaliesData.value);
+      if (anomaliesData.status === "fulfilled")
+        setAnomalies(anomaliesData.value);
     }
 
     init();
@@ -98,7 +106,11 @@ export function useCallsSocket(): CallsState {
     });
 
     socket.onAny((event, ...args) => {
-      console.log("[WS] Event received:", event, args[0]?.id || args[0]?.callCount || "");
+      console.log(
+        "[WS] Event received:",
+        event,
+        args[0]?.id || args[0]?.callCount || "",
+      );
     });
 
     socket.on("call.updated", (call: CallExecution) => {
@@ -106,11 +118,15 @@ export function useCallsSocket(): CallsState {
         const next = new Map(prev);
         const existed = next.has(call.id);
         next.set(call.id, call);
-        console.log(`[WS] call.updated: ${call.id} status=${call.status} existed=${existed} mapSize=${next.size}`);
+        console.log(
+          `[WS] call.updated: ${call.id} status=${call.status} existed=${existed} mapSize=${next.size}`,
+        );
         return next;
       });
       // Refresh latency stats on every call update
-      fetchLatencyStats().then(setLatency).catch(() => {});
+      fetchLatencyStats()
+        .then(setLatency)
+        .catch(() => {});
     });
 
     socket.on("stats.updated", (s: CallStats) => {
@@ -118,17 +134,20 @@ export function useCallsSocket(): CallsState {
       setStats(s);
     });
 
-    socket.on("call.anomaly", (payload: { call: CallExecution; anomalies: string[] }) => {
-      console.log("[WS] call.anomaly:", payload.call.id, payload.anomalies);
-      setAnomalies((prev) => {
-        const entry: AnomalyEntry = {
-          callId: payload.call.id,
-          anomalies: payload.anomalies,
-          timestamp: payload.call.createdAt,
-        };
-        return [entry, ...prev].slice(0, 20);
-      });
-    });
+    socket.on(
+      "call.anomaly",
+      (payload: { call: CallExecution; anomalies: string[] }) => {
+        console.log("[WS] call.anomaly:", payload.call.id, payload.anomalies);
+        setAnomalies((prev) => {
+          const entry: AnomalyEntry = {
+            callId: payload.call.id,
+            anomalies: payload.anomalies,
+            timestamp: payload.call.createdAt,
+          };
+          return [entry, ...prev].slice(0, 20);
+        });
+      },
+    );
 
     return () => {
       cancelled = true;
