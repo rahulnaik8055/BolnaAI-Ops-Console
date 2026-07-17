@@ -40,4 +40,9 @@ export class CallsController {
   async getCostAudit() {
     return this.callsService.getCostAudit();
   }
+
+  @Get('webhook-log/:id')
+  async getWebhookLog(@Param('id') id: string) {
+    return this.callsService.getWebhookLog(id);
+  }
 }

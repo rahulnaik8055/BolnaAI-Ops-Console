@@ -62,8 +62,6 @@ export class CallsService {
       network: calls.reduce((sum, c) => sum + (c.networkCost ?? 0), 0),
     };
 
-    // Simple extrapolation: estimate calls/month as 30 × current daily call count.
-    // This is a placeholder — a real forecast would use trend data and time windows.
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayCalls = calls.filter(
@@ -85,18 +83,21 @@ export class CallsService {
     const calls = await this.prisma.callExecution.findMany({
       orderBy: { createdAt: 'desc' },
       take: 20,
+      include: { webhookEvents: { orderBy: { receivedAt: 'asc' } } },
     });
 
     return calls.map((c) => {
       let rawCostBreakdown: any = null;
       let rawTotalCost: any = null;
       let rawCostBreakdownFromPayload: any = null;
+      let rawPriceBreakdown: any = null;
 
       if (c.rawPayload) {
         try {
           const raw = JSON.parse(c.rawPayload);
           rawTotalCost = raw.total_cost;
           rawCostBreakdownFromPayload = raw.cost_breakdown;
+          rawPriceBreakdown = raw.price_breakdown;
         } catch {}
       }
       if (c.costBreakdown) {
@@ -105,18 +106,55 @@ export class CallsService {
         } catch {}
       }
 
+      let storedPriceBreakdown: any = null;
+      if (c.priceBreakdown) {
+        try {
+          storedPriceBreakdown = JSON.parse(c.priceBreakdown);
+        } catch {}
+      }
+
       const components =
         c.llmCost != null || c.synthesizerCost != null || c.transcriberCost != null || c.platformCost != null || c.networkCost != null
           ? (c.llmCost ?? 0) + (c.synthesizerCost ?? 0) + (c.transcriberCost ?? 0) + (c.platformCost ?? 0) + (c.networkCost ?? 0)
           : null;
 
+      const webhookEventSummaries = c.webhookEvents.map((e) => {
+        let eventCostBreakdown: any = null;
+        let eventPriceBreakdown: any = null;
+        let eventPayload: any = null;
+        try {
+          eventCostBreakdown = e.costBreakdown ? JSON.parse(e.costBreakdown) : null;
+        } catch {}
+        try {
+          eventPriceBreakdown = e.priceBreakdown ? JSON.parse(e.priceBreakdown) : null;
+        } catch {}
+        try {
+          eventPayload = JSON.parse(e.rawPayload);
+        } catch {}
+
+        return {
+          receivedAt: e.receivedAt,
+          status: e.status,
+          billingSettled: e.billingSettled,
+          totalCost: e.totalCost,
+          costBreakdown: eventCostBreakdown,
+          priceBreakdown: eventPriceBreakdown,
+          rawTotalCost: eventPayload?.total_cost ?? null,
+          rawPriceBreakdown: eventPayload?.price_breakdown ?? null,
+          rawCostBreakdown: eventPayload?.cost_breakdown ?? null,
+        };
+      });
+
       return {
         id: c.id,
         status: c.status,
         createdAt: c.createdAt,
-        rawFromPayload: {
+        billingSettled: c.billingSettled,
+        webhookEventCount: c.webhookEvents.length,
+        rawFromLatestPayload: {
           totalCost: rawTotalCost,
           costBreakdown: rawCostBreakdownFromPayload,
+          priceBreakdown: rawPriceBreakdown,
         },
         storedInDb: {
           totalCost: c.totalCost,
@@ -126,11 +164,45 @@ export class CallsService {
           platformCost: c.platformCost,
           networkCost: c.networkCost,
           costBreakdownJson: rawCostBreakdown,
+          priceBreakdown: storedPriceBreakdown,
         },
         computed: {
           sumOfComponents: components,
           matchesStoredTotal: c.totalCost != null && components != null ? Math.abs(c.totalCost - components) < 0.001 : null,
         },
+        eventHistory: webhookEventSummaries,
+      };
+    });
+  }
+
+  async getWebhookLog(executionId: string) {
+    const events = await this.prisma.webhookEvent.findMany({
+      where: { executionId },
+      orderBy: { receivedAt: 'asc' },
+    });
+
+    return events.map((e) => {
+      let payload: any = null;
+      let costBreakdown: any = null;
+      let priceBreakdown: any = null;
+      try {
+        payload = JSON.parse(e.rawPayload);
+        costBreakdown = e.costBreakdown ? JSON.parse(e.costBreakdown) : null;
+        priceBreakdown = e.priceBreakdown ? JSON.parse(e.priceBreakdown) : null;
+      } catch {}
+
+      return {
+        receivedAt: e.receivedAt,
+        status: e.status,
+        billingSettled: e.billingSettled,
+        totalCost: e.totalCost,
+        costBreakdown,
+        priceBreakdown,
+        rawTotalCost: payload?.total_cost ?? null,
+        rawPriceBreakdown: payload?.price_breakdown ?? null,
+        rawCostBreakdown: payload?.cost_breakdown ?? null,
+        rawBillingSettled: payload?.billing_settled ?? null,
+        rawPayload: payload,
       };
     });
   }

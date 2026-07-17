@@ -32,8 +32,42 @@ export class WebhooksService {
 
     const status = VALID_STATUSES.includes(p.status) ? p.status : p.status;
 
-    console.log(`[COST-AUDIT] Webhook id=${p.id} status=${p.status} total_cost=${JSON.stringify(p.total_cost)} (typeof=${typeof p.total_cost}) cost_breakdown=${JSON.stringify(p.cost_breakdown)}`);
+    // ──────────────────────────────────────────────────────────────────
+    // COMPREHENSIVE COST LOGGING
+    // Log every cost-related field so we can determine which one the
+    // Bolna dashboard actually displays.
+    // ──────────────────────────────────────────────────────────────────
+    console.log(
+      `[COST-AUDIT] ─── Webhook Received ───\n` +
+      `  id              = ${p.id}\n` +
+      `  status          = ${p.status}\n` +
+      `  billing_settled = ${JSON.stringify(p.billing_settled)}\n` +
+      `  total_cost      = ${JSON.stringify(p.total_cost)} (typeof=${typeof p.total_cost})\n` +
+      `  cost_breakdown  = ${JSON.stringify(p.cost_breakdown)}\n` +
+      `  price_breakdown = ${JSON.stringify(p.price_breakdown)}\n` +
+      `  ───────────────────────────────────────`,
+    );
 
+    // ──────────────────────────────────────────────────────────────────
+    // APPEND-ONLY: Store every version of the webhook for this execution
+    // This is the audit trail. We never overwrite these.
+    // ──────────────────────────────────────────────────────────────────
+    await this.prisma.webhookEvent.create({
+      data: {
+        executionId: p.id,
+        status: p.status ?? null,
+        billingSettled: p.billing_settled ?? null,
+        totalCost: typeof p.total_cost === 'number' ? p.total_cost : null,
+        costBreakdown: p.cost_breakdown ? JSON.stringify(p.cost_breakdown) : null,
+        priceBreakdown: p.price_breakdown ? JSON.stringify(p.price_breakdown) : null,
+        rawPayload: JSON.stringify(payload),
+      },
+    });
+
+    // ──────────────────────────────────────────────────────────────────
+    // UPSERT: Keep latest state for the live-call view
+    // This is what the frontend renders as the "current" call.
+    // ──────────────────────────────────────────────────────────────────
     const data = {
       id: p.id,
       agentId: p.agent_id,
@@ -60,12 +94,13 @@ export class WebhooksService {
       transcript: p.transcript ?? null,
       summary: p.summary ?? null,
 
-      totalCost: p.total_cost ?? null,
-      llmCost: p.cost_breakdown?.llm ?? null,
-      networkCost: p.cost_breakdown?.network ?? null,
-      platformCost: p.cost_breakdown?.platform ?? null,
-      synthesizerCost: p.cost_breakdown?.synthesizer ?? null,
-      transcriberCost: p.cost_breakdown?.transcriber ?? null,
+      totalCost: typeof p.total_cost === 'number' ? p.total_cost : null,
+      llmCost: typeof p.cost_breakdown?.llm === 'number' ? p.cost_breakdown.llm : null,
+      networkCost: typeof p.cost_breakdown?.network === 'number' ? p.cost_breakdown.network : null,
+      platformCost: typeof p.cost_breakdown?.platform === 'number' ? p.cost_breakdown.platform : null,
+      synthesizerCost: typeof p.cost_breakdown?.synthesizer === 'number' ? p.cost_breakdown.synthesizer : null,
+      transcriberCost: typeof p.cost_breakdown?.transcriber === 'number' ? p.cost_breakdown.transcriber : null,
+      priceBreakdown: p.price_breakdown ? JSON.stringify(p.price_breakdown) : null,
 
       timeToFirstAudio: p.latency_data?.time_to_first_audio ?? null,
       streamId: p.latency_data?.stream_id ?? null,
@@ -130,19 +165,28 @@ export class WebhooksService {
       update: data,
     });
 
-    console.log(`[COST-AUDIT] Stored id=${saved.id} totalCost=${saved.totalCost} llmCost=${saved.llmCost} synthCost=${saved.synthesizerCost} sttCost=${saved.transcriberCost} platformCost=${saved.platformCost} networkCost=${saved.networkCost}`);
-    if (saved.rawPayload) {
-      try {
-        const raw = JSON.parse(saved.rawPayload);
-        console.log(`[COST-AUDIT] Re-read rawPayload total_cost=${raw.total_cost} (typeof=${typeof raw.total_cost}) cost_breakdown=${JSON.stringify(raw.cost_breakdown)}`);
-      } catch {}
-    }
+    // Count how many webhook events we've stored for this call
+    const eventCount = await this.prisma.webhookEvent.count({
+      where: { executionId: p.id },
+    });
+
+    console.log(
+      `[COST-AUDIT] ─── After Upsert (event #${eventCount}) ───\n` +
+      `  id            = ${saved.id}\n` +
+      `  status        = ${saved.status}\n` +
+      `  billingSettled= ${saved.billingSettled}\n` +
+      `  totalCost     = ${saved.totalCost}\n` +
+      `  priceBreakdown= ${saved.priceBreakdown ?? 'null'}\n` +
+      `  llmCost       = ${saved.llmCost}\n` +
+      `  synthCost     = ${saved.synthesizerCost}\n` +
+      `  sttCost       = ${saved.transcriberCost}\n` +
+      `  platformCost  = ${saved.platformCost}\n` +
+      `  networkCost   = ${saved.networkCost}\n` +
+      `  ───────────────────────────────────────`,
+    );
 
     this.gateway.broadcastCallUpdate(saved);
 
-    // Anomaly detection — computed on the fly, not persisted to DB.
-    // Tradeoff: anomalies are ephemeral (lost on restart) but avoid schema churn.
-    // For a production system you'd add an `anomalyFlags String?` column via migration.
     const anomalies = await this.latencyStats.detectAnomalies(saved);
     if (anomalies.length > 0) {
       this.latencyStats.bufferAnomaly({ callId: saved.id, anomalies });
@@ -174,8 +218,6 @@ export class WebhooksService {
       network: calls.reduce((sum, c) => sum + (c.networkCost ?? 0), 0),
     };
 
-    // Simple extrapolation: estimate calls/month as 30 × current daily call count.
-    // This is a placeholder — a real forecast would use trend data and time windows.
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayCalls = calls.filter(
@@ -183,8 +225,6 @@ export class WebhooksService {
     ).length;
     const estimatedCallsPerMonth = todayCalls > 0 ? todayCalls * 30 : callCount;
     const projectedMonthlyBurn = avgCostPerCall * estimatedCallsPerMonth;
-
-    console.log(`[COST-AUDIT] Stats totalSpend=${totalSpend} callCount=${callCount} avgCostPerCall=${avgCostPerCall} components=${JSON.stringify(costByComponent)}`);
 
     return {
       totalSpend,
