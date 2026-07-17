@@ -32,6 +32,8 @@ export class WebhooksService {
 
     const status = VALID_STATUSES.includes(p.status) ? p.status : p.status;
 
+    console.log(`[COST-AUDIT] Webhook id=${p.id} status=${p.status} total_cost=${JSON.stringify(p.total_cost)} (typeof=${typeof p.total_cost}) cost_breakdown=${JSON.stringify(p.cost_breakdown)}`);
+
     const data = {
       id: p.id,
       agentId: p.agent_id,
@@ -128,6 +130,14 @@ export class WebhooksService {
       update: data,
     });
 
+    console.log(`[COST-AUDIT] Stored id=${saved.id} totalCost=${saved.totalCost} llmCost=${saved.llmCost} synthCost=${saved.synthesizerCost} sttCost=${saved.transcriberCost} platformCost=${saved.platformCost} networkCost=${saved.networkCost}`);
+    if (saved.rawPayload) {
+      try {
+        const raw = JSON.parse(saved.rawPayload);
+        console.log(`[COST-AUDIT] Re-read rawPayload total_cost=${raw.total_cost} (typeof=${typeof raw.total_cost}) cost_breakdown=${JSON.stringify(raw.cost_breakdown)}`);
+      } catch {}
+    }
+
     this.gateway.broadcastCallUpdate(saved);
 
     // Anomaly detection — computed on the fly, not persisted to DB.
@@ -173,6 +183,8 @@ export class WebhooksService {
     ).length;
     const estimatedCallsPerMonth = todayCalls > 0 ? todayCalls * 30 : callCount;
     const projectedMonthlyBurn = avgCostPerCall * estimatedCallsPerMonth;
+
+    console.log(`[COST-AUDIT] Stats totalSpend=${totalSpend} callCount=${callCount} avgCostPerCall=${avgCostPerCall} components=${JSON.stringify(costByComponent)}`);
 
     return {
       totalSpend,

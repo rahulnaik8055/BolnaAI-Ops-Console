@@ -80,4 +80,58 @@ export class CallsService {
       projectedMonthlyBurn,
     };
   }
+
+  async getCostAudit() {
+    const calls = await this.prisma.callExecution.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    return calls.map((c) => {
+      let rawCostBreakdown: any = null;
+      let rawTotalCost: any = null;
+      let rawCostBreakdownFromPayload: any = null;
+
+      if (c.rawPayload) {
+        try {
+          const raw = JSON.parse(c.rawPayload);
+          rawTotalCost = raw.total_cost;
+          rawCostBreakdownFromPayload = raw.cost_breakdown;
+        } catch {}
+      }
+      if (c.costBreakdown) {
+        try {
+          rawCostBreakdown = JSON.parse(c.costBreakdown);
+        } catch {}
+      }
+
+      const components =
+        c.llmCost != null || c.synthesizerCost != null || c.transcriberCost != null || c.platformCost != null || c.networkCost != null
+          ? (c.llmCost ?? 0) + (c.synthesizerCost ?? 0) + (c.transcriberCost ?? 0) + (c.platformCost ?? 0) + (c.networkCost ?? 0)
+          : null;
+
+      return {
+        id: c.id,
+        status: c.status,
+        createdAt: c.createdAt,
+        rawFromPayload: {
+          totalCost: rawTotalCost,
+          costBreakdown: rawCostBreakdownFromPayload,
+        },
+        storedInDb: {
+          totalCost: c.totalCost,
+          llmCost: c.llmCost,
+          synthesizerCost: c.synthesizerCost,
+          transcriberCost: c.transcriberCost,
+          platformCost: c.platformCost,
+          networkCost: c.networkCost,
+          costBreakdownJson: rawCostBreakdown,
+        },
+        computed: {
+          sumOfComponents: components,
+          matchesStoredTotal: c.totalCost != null && components != null ? Math.abs(c.totalCost - components) < 0.001 : null,
+        },
+      };
+    });
+  }
 }

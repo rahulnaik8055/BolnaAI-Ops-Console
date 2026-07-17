@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param } from '@nestjs/common';
 import { CallsService } from './calls.service';
 import { LatencyStatsService } from '../webhooks/latency-stats.service';
 
@@ -34,5 +34,10 @@ export class CallsController {
   @Get('latency-stats')
   async getLatencyStats() {
     return this.latencyStats.computeBaseline(true);
+  }
+
+  @Get('cost-audit')
+  async getCostAudit() {
+    return this.callsService.getCostAudit();
   }
 }
