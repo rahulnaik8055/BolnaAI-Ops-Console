@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model CallExecution {
+  id                    String    @id
+  agentId               String
+  batchId               String?
+  campaignId            String?
+  status                String
+  smartStatus           String?
+  provider              String?
+
+  scheduledAt           DateTime?
+  initiatedAt           DateTime?
+  createdAtStr          String?
+  updatedAtStr          String?
+
+  answeredByVoicemail   Boolean?
+  conversationDuration  Float?
+  errorMessage          String?
+  billingSettled        Boolean?
+  processingStatus      String?
+
+  userNumber            String?
+  agentNumber           String?
+
+  transcript            String?
+  summary               String?
+
+  totalCost             Float?
+  llmCost               Float?
+  networkCost           Float?
+  platformCost          Float?
+  synthesizerCost       Float?
+  transcriberCost       Float?
+
+  timeToFirstAudio      Float?
+  streamId              Float?
+  latencyRegion         String?
+
+  recordingUrl          String?
+  toNumber              String?
+  fromNumber            String?
+  callType              String?
+  hangupBy              String?
+  hangupReason          String?
+  hangupProviderCode    Int?
+  providerCallId        String?
+  hostedTelephony       Boolean?
+
+  retryCount            Int?
+
+  usageBreakdown        String?
+  costBreakdown         String?
+  latencyData           String?
+  extractedData         String?
+  customExtractions     String?
+  contextDetails        String?
+  telephonyDataRaw      String?
+  transferCallData      String?
+  retryHistory          String?
+  postProcessingPhases  String?
+  batchRunDetails       String?
+  agentContextDetails   String?
+  agentExtraction       String?
+
+  rawPayload            String
+
+  updatedAt             DateTime  @updatedAt
+  createdAt             DateTime  @default(now())
+
+  @@index([status])
+  @@index([agentId])
+}
