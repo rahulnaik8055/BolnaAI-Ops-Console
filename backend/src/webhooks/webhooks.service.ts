@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { CallsStoreService, CallExecution } from '../calls/calls-store.service';
 import { CallsGateway } from '../websocket/calls.gateway';
 import { LatencyStatsService } from './latency-stats.service';
 
-const VALID_STATUSES = [
+const VALID_STATUSES = new Set([
   'queued',
   'initiated',
   'ringing',
@@ -17,25 +17,22 @@ const VALID_STATUSES = [
   'stopped',
   'error',
   'balance-low',
-];
+]);
 
 @Injectable()
 export class WebhooksService {
   constructor(
-    private prisma: PrismaService,
+    private store: CallsStoreService,
     private gateway: CallsGateway,
     private latencyStats: LatencyStatsService,
   ) {}
 
   async handleWebhook(payload: any) {
     const p = payload;
-
-    const status = VALID_STATUSES.includes(p.status) ? p.status : p.status;
+    const status = p.status;
 
     // ──────────────────────────────────────────────────────────────────
     // COMPREHENSIVE COST LOGGING
-    // Log every cost-related field so we can determine which one the
-    // Bolna dashboard actually displays.
     // ──────────────────────────────────────────────────────────────────
     console.log(
       `[COST-AUDIT] ─── Webhook Received ───\n` +
@@ -44,15 +41,13 @@ export class WebhooksService {
       `  billing_settled = ${JSON.stringify(p.billing_settled)}\n` +
       `  total_cost      = ${JSON.stringify(p.total_cost)} (typeof=${typeof p.total_cost})\n` +
       `  cost_breakdown  = ${JSON.stringify(p.cost_breakdown)}\n` +
-      `  price_breakdown = ${JSON.stringify(p.price_breakdown)}\n` +
       `  ───────────────────────────────────────`,
     );
 
     // ──────────────────────────────────────────────────────────────────
-    // UPSERT FIRST: Parent row must exist before we append the event.
-    // Keep latest state for the live-call view.
+    // UPSERT FIRST: parent must exist before we append the event.
     // ──────────────────────────────────────────────────────────────────
-    const data = {
+    const saved = this.store.upsertCall({
       id: p.id,
       agentId: p.agent_id,
       batchId: p.batch_id ?? null,
@@ -60,24 +55,17 @@ export class WebhooksService {
       status,
       smartStatus: p.smart_status ?? null,
       provider: p.provider ?? null,
-
-      scheduledAt: p.scheduled_at ? new Date(p.scheduled_at) : null,
-      initiatedAt: p.initiated_at ? new Date(p.initiated_at) : null,
-      createdAtStr: p.created_at_str ?? null,
-      updatedAtStr: p.updated_at_str ?? null,
-
+      scheduledAt: p.scheduled_at ?? null,
+      initiatedAt: p.initiated_at ?? null,
       answeredByVoicemail: p.answered_by_voice_mail ?? null,
       conversationDuration: p.conversation_duration ?? null,
       errorMessage: p.error_message ?? null,
       billingSettled: p.billing_settled ?? null,
       processingStatus: p.processing_status ?? null,
-
       userNumber: p.user_number ?? null,
       agentNumber: p.agent_number ?? null,
-
       transcript: p.transcript ?? null,
       summary: p.summary ?? null,
-
       totalCost: typeof p.total_cost === 'number' ? p.total_cost : null,
       llmCost: typeof p.cost_breakdown?.llm === 'number' ? p.cost_breakdown.llm : null,
       networkCost: typeof p.cost_breakdown?.network === 'number' ? p.cost_breakdown.network : null,
@@ -85,11 +73,9 @@ export class WebhooksService {
       synthesizerCost: typeof p.cost_breakdown?.synthesizer === 'number' ? p.cost_breakdown.synthesizer : null,
       transcriberCost: typeof p.cost_breakdown?.transcriber === 'number' ? p.cost_breakdown.transcriber : null,
       priceBreakdown: p.price_breakdown ? JSON.stringify(p.price_breakdown) : null,
-
       timeToFirstAudio: p.latency_data?.time_to_first_audio ?? null,
       streamId: p.latency_data?.stream_id ?? null,
       latencyRegion: p.latency_data?.region ?? null,
-
       recordingUrl: p.telephony_data?.recording_url ?? null,
       toNumber: p.telephony_data?.to_number ?? null,
       fromNumber: p.telephony_data?.from_number ?? null,
@@ -99,76 +85,25 @@ export class WebhooksService {
       hangupProviderCode: p.telephony_data?.hangup_provider_code ?? null,
       providerCallId: p.telephony_data?.provider_call_id ?? null,
       hostedTelephony: p.telephony_data?.hosted_telephony ?? null,
-
       retryCount: p.retry_count ?? null,
-
-      usageBreakdown: p.usage_breakdown
-        ? JSON.stringify(p.usage_breakdown)
-        : null,
-      costBreakdown: p.cost_breakdown
-        ? JSON.stringify(p.cost_breakdown)
-        : null,
-      latencyData: p.latency_data ? JSON.stringify(p.latency_data) : null,
-      extractedData: p.extracted_data
-        ? JSON.stringify(p.extracted_data)
-        : null,
-      customExtractions: p.custom_extractions
-        ? JSON.stringify(p.custom_extractions)
-        : null,
-      contextDetails: p.context_details
-        ? JSON.stringify(p.context_details)
-        : null,
-      telephonyDataRaw: p.telephony_data
-        ? JSON.stringify(p.telephony_data)
-        : null,
-      transferCallData: p.transfer_call_data
-        ? JSON.stringify(p.transfer_call_data)
-        : null,
-      retryHistory: p.retry_history
-        ? JSON.stringify(p.retry_history)
-        : null,
-      postProcessingPhases: p.post_processing_phases
-        ? JSON.stringify(p.post_processing_phases)
-        : null,
-      batchRunDetails: p.batch_run_details
-        ? JSON.stringify(p.batch_run_details)
-        : null,
-      agentContextDetails: p.agent_context_details
-        ? JSON.stringify(p.agent_context_details)
-        : null,
-      agentExtraction: p.agent_extraction
-        ? JSON.stringify(p.agent_extraction)
-        : null,
-
-      rawPayload: JSON.stringify(payload),
-    };
-
-    const saved = await this.prisma.callExecution.upsert({
-      where: { id: p.id },
-      create: data,
-      update: data,
+      usageBreakdown: p.usage_breakdown ?? null,
+      costBreakdown: p.cost_breakdown ?? null,
+      latencyData: p.latency_data ?? null,
+      extractedData: p.extracted_data ?? null,
+      rawPayload: payload,
     });
 
     // ──────────────────────────────────────────────────────────────────
-    // APPEND-ONLY: Store every version of the webhook for this execution.
-    // Parent row now exists, so FK constraint is satisfied.
-    // This is the audit trail. We never overwrite these.
+    // APPEND-ONLY: every version of the webhook for this execution.
     // ──────────────────────────────────────────────────────────────────
-    await this.prisma.webhookEvent.create({
-      data: {
-        executionId: p.id,
-        status: p.status ?? null,
-        billingSettled: p.billing_settled ?? null,
-        totalCost: typeof p.total_cost === 'number' ? p.total_cost : null,
-        costBreakdown: p.cost_breakdown ? JSON.stringify(p.cost_breakdown) : null,
-        priceBreakdown: p.price_breakdown ? JSON.stringify(p.price_breakdown) : null,
-        rawPayload: JSON.stringify(payload),
-      },
-    });
-
-    // Count how many webhook events we've stored for this call
-    const eventCount = await this.prisma.webhookEvent.count({
-      where: { executionId: p.id },
+    const eventCount = this.store.appendWebhookEvent({
+      executionId: p.id,
+      status: p.status ?? null,
+      billingSettled: p.billing_settled ?? null,
+      totalCost: typeof p.total_cost === 'number' ? p.total_cost : null,
+      costBreakdown: p.cost_breakdown ?? null,
+      priceBreakdown: p.price_breakdown ?? null,
+      rawPayload: payload,
     });
 
     console.log(
@@ -177,7 +112,6 @@ export class WebhooksService {
       `  status        = ${saved.status}\n` +
       `  billingSettled= ${saved.billingSettled}\n` +
       `  totalCost     = ${saved.totalCost}\n` +
-      `  priceBreakdown= ${saved.priceBreakdown ?? 'null'}\n` +
       `  llmCost       = ${saved.llmCost}\n` +
       `  synthCost     = ${saved.synthesizerCost}\n` +
       `  sttCost       = ${saved.transcriberCost}\n` +
@@ -195,17 +129,15 @@ export class WebhooksService {
     }
 
     if (status === 'completed') {
-      const stats = await this.getStats();
+      const stats = this.getStats();
       this.gateway.broadcastStatsUpdate(stats);
     }
 
     return saved;
   }
 
-  private async getStats() {
-    const calls = await this.prisma.callExecution.findMany({
-      where: { totalCost: { not: null } },
-    });
+  getStats() {
+    const calls = this.store.getAll().filter((c) => c.totalCost != null);
 
     const callCount = calls.length;
     const totalSpend = calls.reduce((sum, c) => sum + (c.totalCost ?? 0), 0);
@@ -219,11 +151,11 @@ export class WebhooksService {
       network: calls.reduce((sum, c) => sum + (c.networkCost ?? 0), 0),
     };
 
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const todayCalls = calls.filter(
-      (c) => c.createdAt >= todayStart,
-    ).length;
+    const now = Date.now();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayMs = todayStart.getTime();
+    const todayCalls = calls.filter((c) => c.createdAt >= todayMs).length;
     const estimatedCallsPerMonth = todayCalls > 0 ? todayCalls * 30 : callCount;
     const projectedMonthlyBurn = avgCostPerCall * estimatedCallsPerMonth;
 

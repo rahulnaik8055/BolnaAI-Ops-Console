@@ -1,10 +1,10 @@
 import { Injectable, HttpException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { CallsStoreService } from './calls-store.service';
 import axios from 'axios';
 
 @Injectable()
 export class CallsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private store: CallsStoreService) {}
 
   async triggerCall(agentId: string, recipientPhoneNumber: string) {
     const apiKey = process.env.BOLNA_API_KEY;
@@ -38,17 +38,12 @@ export class CallsService {
     }
   }
 
-  async listRecentCalls() {
-    return this.prisma.callExecution.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
+  listRecentCalls() {
+    return this.store.listRecent(50);
   }
 
-  async getStats() {
-    const calls = await this.prisma.callExecution.findMany({
-      where: { totalCost: { not: null } },
-    });
+  getStats() {
+    const calls = this.store.getAll().filter((c) => c.totalCost != null);
 
     const callCount = calls.length;
     const totalSpend = calls.reduce((sum, c) => sum + (c.totalCost ?? 0), 0);
@@ -62,11 +57,11 @@ export class CallsService {
       network: calls.reduce((sum, c) => sum + (c.networkCost ?? 0), 0),
     };
 
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const todayCalls = calls.filter(
-      (c) => c.createdAt >= todayStart,
-    ).length;
+    const now = Date.now();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayMs = todayStart.getTime();
+    const todayCalls = calls.filter((c) => c.createdAt >= todayMs).length;
     const estimatedCallsPerMonth = todayCalls > 0 ? todayCalls * 30 : callCount;
     const projectedMonthlyBurn = avgCostPerCall * estimatedCallsPerMonth;
 
@@ -79,68 +74,30 @@ export class CallsService {
     };
   }
 
-  async getCostAudit() {
-    const calls = await this.prisma.callExecution.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      include: { webhookEvents: { orderBy: { receivedAt: 'asc' } } },
-    });
+  getCostAudit() {
+    const calls = this.store.listRecent(20);
 
     return calls.map((c) => {
-      let rawCostBreakdown: any = null;
-      let rawTotalCost: any = null;
-      let rawCostBreakdownFromPayload: any = null;
-      let rawPriceBreakdown: any = null;
-
-      if (c.rawPayload) {
-        try {
-          const raw = JSON.parse(c.rawPayload);
-          rawTotalCost = raw.total_cost;
-          rawCostBreakdownFromPayload = raw.cost_breakdown;
-          rawPriceBreakdown = raw.price_breakdown;
-        } catch {}
-      }
-      if (c.costBreakdown) {
-        try {
-          rawCostBreakdown = JSON.parse(c.costBreakdown);
-        } catch {}
-      }
-
-      let storedPriceBreakdown: any = null;
-      if (c.priceBreakdown) {
-        try {
-          storedPriceBreakdown = JSON.parse(c.priceBreakdown);
-        } catch {}
-      }
+      const rawPayload = c.rawPayload;
+      const rawTotalCost = rawPayload?.total_cost ?? null;
+      const rawCostBreakdownFromPayload = rawPayload?.cost_breakdown ?? null;
 
       const components =
         c.llmCost != null || c.synthesizerCost != null || c.transcriberCost != null || c.platformCost != null || c.networkCost != null
           ? (c.llmCost ?? 0) + (c.synthesizerCost ?? 0) + (c.transcriberCost ?? 0) + (c.platformCost ?? 0) + (c.networkCost ?? 0)
           : null;
 
-      const webhookEventSummaries = c.webhookEvents.map((e) => {
-        let eventCostBreakdown: any = null;
-        let eventPriceBreakdown: any = null;
-        let eventPayload: any = null;
-        try {
-          eventCostBreakdown = e.costBreakdown ? JSON.parse(e.costBreakdown) : null;
-        } catch {}
-        try {
-          eventPriceBreakdown = e.priceBreakdown ? JSON.parse(e.priceBreakdown) : null;
-        } catch {}
-        try {
-          eventPayload = JSON.parse(e.rawPayload);
-        } catch {}
-
+      const events = this.store.getWebhookEvents(c.id);
+      const webhookEventSummaries = events.map((e) => {
+        const eventPayload = e.rawPayload;
         return {
-          receivedAt: e.receivedAt,
+          receivedAt: new Date(e.receivedAt).toISOString(),
           status: e.status,
           billingSettled: e.billingSettled,
           totalCost: e.totalCost,
-          costBreakdown: eventCostBreakdown,
-          priceBreakdown: eventPriceBreakdown,
+          costBreakdown: e.costBreakdown,
+          priceBreakdown: e.priceBreakdown,
           rawTotalCost: eventPayload?.total_cost ?? null,
-          rawPriceBreakdown: eventPayload?.price_breakdown ?? null,
           rawCostBreakdown: eventPayload?.cost_breakdown ?? null,
         };
       });
@@ -148,13 +105,12 @@ export class CallsService {
       return {
         id: c.id,
         status: c.status,
-        createdAt: c.createdAt,
+        createdAt: new Date(c.createdAt).toISOString(),
         billingSettled: c.billingSettled,
-        webhookEventCount: c.webhookEvents.length,
+        webhookEventCount: events.length,
         rawFromLatestPayload: {
           totalCost: rawTotalCost,
           costBreakdown: rawCostBreakdownFromPayload,
-          priceBreakdown: rawPriceBreakdown,
         },
         storedInDb: {
           totalCost: c.totalCost,
@@ -163,8 +119,7 @@ export class CallsService {
           transcriberCost: c.transcriberCost,
           platformCost: c.platformCost,
           networkCost: c.networkCost,
-          costBreakdownJson: rawCostBreakdown,
-          priceBreakdown: storedPriceBreakdown,
+          costBreakdownJson: c.costBreakdown,
         },
         computed: {
           sumOfComponents: components,
@@ -175,31 +130,19 @@ export class CallsService {
     });
   }
 
-  async getWebhookLog(executionId: string) {
-    const events = await this.prisma.webhookEvent.findMany({
-      where: { executionId },
-      orderBy: { receivedAt: 'asc' },
-    });
+  getWebhookLog(executionId: string) {
+    const events = this.store.getWebhookEvents(executionId);
 
     return events.map((e) => {
-      let payload: any = null;
-      let costBreakdown: any = null;
-      let priceBreakdown: any = null;
-      try {
-        payload = JSON.parse(e.rawPayload);
-        costBreakdown = e.costBreakdown ? JSON.parse(e.costBreakdown) : null;
-        priceBreakdown = e.priceBreakdown ? JSON.parse(e.priceBreakdown) : null;
-      } catch {}
-
+      const payload = e.rawPayload;
       return {
-        receivedAt: e.receivedAt,
+        receivedAt: new Date(e.receivedAt).toISOString(),
         status: e.status,
         billingSettled: e.billingSettled,
         totalCost: e.totalCost,
-        costBreakdown,
-        priceBreakdown,
+        costBreakdown: e.costBreakdown,
+        priceBreakdown: e.priceBreakdown,
         rawTotalCost: payload?.total_cost ?? null,
-        rawPriceBreakdown: payload?.price_breakdown ?? null,
         rawCostBreakdown: payload?.cost_breakdown ?? null,
         rawBillingSettled: payload?.billing_settled ?? null,
         rawPayload: payload,
